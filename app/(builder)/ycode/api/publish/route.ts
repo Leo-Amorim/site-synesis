@@ -582,6 +582,13 @@ export async function POST(request: NextRequest) {
         indirectlyAffectedPageIds,
       );
 
+      // Capture the live routes we'll warm later. We only warm routes that
+      // still exist (the ones selectiveInvalidation returned) — not deleted
+      // or renamed ones added below, since their URLs no longer render.
+      const liveRoutesToWarm = invalidationResult.strategy === 'selective'
+        ? [...invalidationResult.invalidatedRoutes]
+        : [];
+
       // Invalidate routes of deleted/renamed pages and deleted CMS items
       if (invalidationResult.strategy !== 'full') {
         const { invalidatePages, getRoutePathsForDeletedCollectionItems } = await import('@/lib/services/cacheService');
@@ -620,6 +627,49 @@ export async function POST(request: NextRequest) {
           ? `${invalidationResult.invalidatedRoutes.length} route(s)${deletedPageRoutes.length > 0 ? ` (incl. ${deletedPageRoutes.length} deleted)` : ''}`
           : invalidationResult.reason,
       );
+
+      // After invalidation, prime the affected pages in the background so the
+      // first real visitor doesn't get x-vercel-cache: STALE.
+      // invalidateByTag marks entries stale rather than hard-purging; the next
+      // request to a stale entry serves the OLD body and kicks off a
+      // background revalidation. We ARE that next request — by warming each
+      // route from the publish handler, we absorb the STALE and trigger the
+      // revalidation ourselves, so the real visitor's first hit is HIT.
+      //
+      // Uses Vercel's waitUntil so warming runs AFTER the publish response is
+      // sent: zero added publish latency. Capped to avoid runaway cost when a
+      // dynamic page maps to hundreds of CMS items — long-tail items will
+      // simply self-warm on their first real visit.
+      //
+      // Skipped on full invalidation (rare) — enumerating every route and
+      // warming a whole site on every global change isn't worth the cost.
+      if (liveRoutesToWarm.length > 0 && process.env.VERCEL === '1') {
+        const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+        if (host) {
+          const proto = request.headers.get('x-forwarded-proto') ?? 'https';
+          const baseUrl = `${proto}://${host}`;
+          const MAX_WARM = 50;
+          const toWarm = liveRoutesToWarm.slice(0, MAX_WARM);
+
+          try {
+            const { waitUntil } = await import('@vercel/functions');
+            waitUntil(
+              Promise.allSettled(
+                toWarm.map((route) =>
+                  fetch(`${baseUrl}/${route}`, {
+                    signal: AbortSignal.timeout(15000),
+                  }).catch(() => null),
+                ),
+              ),
+            );
+            console.log(
+              `[Cache] warming ${toWarm.length}${liveRoutesToWarm.length > MAX_WARM ? ` of ${liveRoutesToWarm.length}` : ''} route(s) in background`,
+            );
+          } catch {
+            // Non-fatal: warming is an optimization, not a correctness requirement
+          }
+        }
+      }
     } catch {
       // Fallback: if selective invalidation fails, nuke everything
       try { await clearAllCache(); } catch { /* non-fatal */ }
