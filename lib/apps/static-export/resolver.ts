@@ -34,6 +34,8 @@ export interface ResolvedPage {
   bodyHtml: string
   /** Class string from the synthetic `body` layer (background, text color, fonts). */
   bodyClasses: string
+  /** BCP-47 language code derived from the active locale. */
+  lang: string
   outputKey: string
   hasSlider: boolean
   interactions: ExportedInteraction[]
@@ -170,6 +172,7 @@ function renderResolved(
     page,
     bodyHtml,
     bodyClasses: getBodyClasses(layers),
+    lang: ctx.locale?.code ?? 'en',
     outputKey,
     hasSlider: layerTreeContains(layers, 'slider'),
     interactions: collectInteractions(layers),

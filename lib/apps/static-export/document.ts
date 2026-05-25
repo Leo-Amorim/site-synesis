@@ -401,8 +401,14 @@ export interface BuildHtmlInput {
   bodyHtml: string
   /** Class string from the synthetic `body` layer (background, text color, fonts). */
   bodyClasses?: string
+  /** BCP-47 language code for the `<html lang>` attribute. Defaults to `'en'`. */
+  lang?: string
+  /** Pre-resolved OG image URL (e.g. `/a/{hash}/{slug}.webp`). */
+  ogImageUrl?: string | null
   publishedCss: string | null
   colorVariablesCss: string | null
+  /** Inlined @font-face + font class CSS for Google and custom fonts. */
+  fontsCss?: string | null
   includeSwiper: boolean
   interactions: ExportedInteraction[]
 }
@@ -411,15 +417,18 @@ export function buildDocument({
   page,
   bodyHtml,
   bodyClasses,
+  lang = 'en',
+  ogImageUrl,
   publishedCss,
   colorVariablesCss,
+  fontsCss,
   includeSwiper,
   interactions,
 }: BuildHtmlInput): string {
   const seo = extractSeo(page)
   const title = seo.title || page.name
   const description = seo.description ?? ''
-  const ogImage = resolveSeoImage(seo.image)
+  const ogImage = ogImageUrl ?? resolveSeoImage(seo.image)
   const noindex = seo.noindex || page.error_page !== null
 
   const head: string[] = []
@@ -439,7 +448,7 @@ export function buildDocument({
   }
   if (noindex) head.push('<meta name="robots" content="noindex" />')
 
-  const css = [colorVariablesCss, publishedCss].filter(Boolean).join('\n')
+  const css = [fontsCss, colorVariablesCss, publishedCss].filter(Boolean).join('\n')
   if (css) head.push(`<style>${css}</style>`)
 
   if (includeSwiper) {
@@ -460,7 +469,7 @@ export function buildDocument({
 
   return [
     '<!DOCTYPE html>',
-    '<html lang="en">',
+    `<html lang="${escapeHtml(lang)}">`,
     '<head>',
     ...head.map((line) => indent + line),
     '</head>',

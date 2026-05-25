@@ -18,7 +18,7 @@ import type { OutputFile, Writer } from './types'
 
 const GITHUB_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 const GITHUB_BRANCH_RE = /^[A-Za-z0-9._/-]+$/
-const GITHUB_TOKEN_RE = /^[A-Za-z0-9_-]+$/
+const GITHUB_TOKEN_RE = /^[A-Za-z0-9_.=-]+$/
 
 interface GithubWriterContext {
   config: ExportConfig

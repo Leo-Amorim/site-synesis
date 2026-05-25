@@ -8,6 +8,16 @@
 
 import { randomUUID } from 'crypto'
 
+import { getAssetProxyUrl } from '@/lib/asset-utils'
+import {
+  buildCustomFontsCss,
+  buildFontClassesCss,
+  fetchGoogleFontsCss,
+  getGoogleFontLinks,
+} from '@/lib/font-utils'
+import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository'
+import { getAssetById } from '@/lib/repositories/assetRepository'
+import { getPublishedFonts } from '@/lib/repositories/fontRepository'
 import { getSettingByKey } from '@/lib/repositories/settingsRepository'
 import { getTranslationsByLocale } from '@/lib/repositories/translationRepository'
 import { getSupabaseAdmin } from '@/lib/supabase-server'
@@ -28,6 +38,64 @@ import { createGithubWriter } from './writers/github'
 import { createLocalWriter } from './writers/local'
 import { createS3Writer } from './writers/s3'
 
+/**
+ * Convert absolute paths to document-relative paths so exported HTML works
+ * on any static host, subdirectory deployment, or local `file://` open.
+ *
+ * The prefix depends on how deep the output file is:
+ *   `index.html`                     → `./`
+ *   `about/index.html`               → `../`
+ *   `services/training/index.html`   → `../../`
+ *
+ * Handles both bundled asset paths and internal page links.
+ */
+const ABSOLUTE_ASSET_RE = /(?<=["'\s,=])\/(?=a\/[A-Za-z0-9]{22}\/|ycode\/layouts\/assets\/|swiper-minimal\.css)/g
+const INTERNAL_LINK_RE = /href="\/([^"]*?)"/g
+
+function relativizePaths(html: string, outputKey: string): string {
+  const depth = outputKey.split('/').length - 1
+  const prefix = depth === 0 ? './' : '../'.repeat(depth)
+
+  let result = html.replace(ABSOLUTE_ASSET_RE, prefix)
+
+  result = result.replace(INTERNAL_LINK_RE, (_match, path: string) => {
+    if (/^a\/[A-Za-z0-9]{22}\//.test(path)) return `href="${prefix}${path}"`
+    if (path.startsWith('ycode/layouts/assets/')) return `href="${prefix}${path}"`
+
+    const hashIdx = path.indexOf('#')
+    const pathPart = hashIdx >= 0 ? path.slice(0, hashIdx) : path
+    const hash = hashIdx >= 0 ? path.slice(hashIdx) : ''
+    const trimmed = pathPart.replace(/^\/+/, '').replace(/\/+$/, '')
+
+    if (!trimmed) return `href="${prefix}index.html${hash}"`
+    return `href="${prefix}${trimmed}/index.html${hash}"`
+  })
+
+  return result
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function resolvePageOgImage(page: Page): Promise<string | null> {
+  const seo = (page.settings as { seo?: { image?: unknown } } | undefined)?.seo
+  if (!seo?.image) return null
+
+  if (typeof seo.image === 'object' && (seo.image as { public_url?: string }).public_url) {
+    return (seo.image as { public_url: string }).public_url
+  }
+
+  const raw = typeof seo.image === 'string' ? seo.image : (seo.image as { id?: string }).id
+  if (!raw || !UUID_RE.test(raw)) return null
+
+  try {
+    const asset = await getAssetById(raw, true)
+    if (!asset) return null
+    return getAssetProxyUrl(asset) || asset.public_url || null
+  } catch {
+    return null
+  }
+}
+
 export async function exportSite(): Promise<ExportJob> {
   const jobId = randomUUID()
   const job: ExportJob = {
@@ -39,6 +107,8 @@ export async function exportSite(): Promise<ExportJob> {
     pagesExported: 0,
     filesWritten: 0,
   }
+
+  await saveLastExportJob(job).catch(() => { /* non-fatal */ })
 
   try {
     const config = await getExportConfig()
@@ -68,15 +138,16 @@ export async function exportSite(): Promise<ExportJob> {
       return job
     }
 
-    // ---- Folders + shared CSS + locales in parallel ----------------------
-    const [folderResult, publishedCss, colorVariablesCss, localeResult] = await Promise.all([
+    // ---- Folders + shared CSS + fonts + locales in parallel ---------------
+    const [folderResult, publishedCss, colorVariablesCss, fonts, localeResult] = await Promise.all([
       client
         .from('page_folders')
         .select('*')
         .is('deleted_at', null)
         .order('depth', { ascending: true }),
       getSettingByKey('published_css').catch(() => null),
-      getSettingByKey('color_variables_css').catch(() => null),
+      generateColorVariablesCss().catch(() => null),
+      getPublishedFonts().catch(() => []),
       client
         .from('locales')
         .select('*')
@@ -100,12 +171,27 @@ export async function exportSite(): Promise<ExportJob> {
       )
     }
 
+    // ---- Font CSS (Google inlined @font-face + custom @font-face + class rules)
+    let fontsCss = ''
+    if (fonts.length > 0) {
+      const googleLinks = getGoogleFontLinks(fonts)
+      const [googleCss] = await Promise.all([
+        googleLinks.length > 0
+          ? fetchGoogleFontsCss(googleLinks).catch(() => '')
+          : Promise.resolve(''),
+      ])
+      fontsCss = [googleCss, buildCustomFontsCss(fonts), buildFontClassesCss(fonts)]
+        .filter(Boolean)
+        .join('\n')
+    }
+
     // ---- Render every page (default locale + per non-default locale) ----
     const outputs: OutputFile[] = []
     const referencedAssetPaths = new Set<string>()
 
     const renderPage = async (page: Page, ctx: LocaleContext): Promise<void> => {
       let yieldedAny = false
+      const ogImageUrl = await resolvePageOgImage(page)
       try {
         for await (const resolved of resolvePages(page, folders, pages, ctx)) {
           yieldedAny = true
@@ -113,15 +199,18 @@ export async function exportSite(): Promise<ExportJob> {
             page: resolved.page,
             bodyHtml: resolved.bodyHtml,
             bodyClasses: resolved.bodyClasses,
+            lang: resolved.lang,
+            ogImageUrl,
             publishedCss: publishedCss ?? null,
             colorVariablesCss: colorVariablesCss ?? null,
+            fontsCss: fontsCss || null,
             includeSwiper: resolved.hasSlider,
             interactions: resolved.interactions,
           })
 
           // Collect Ycode's built-in placeholder URLs referenced from this
           // page so we can ship them alongside the HTML for fully
-          // self-contained hosting.
+          // self-contained hosting (collect before relativizing).
           for (const match of html.matchAll(/\/ycode\/layouts\/assets\/[^"'\s)]+/g)) {
             referencedAssetPaths.add(match[0])
           }
@@ -132,9 +221,11 @@ export async function exportSite(): Promise<ExportJob> {
             referencedAssetPaths.add(SWIPER_CSS_PATH)
           }
 
+          const finalHtml = relativizePaths(html, resolved.outputKey)
+
           outputs.push({
             key: resolved.outputKey,
-            body: html,
+            body: finalHtml,
             contentType: contentTypeFor(resolved.outputKey),
           })
           job.pagesExported++

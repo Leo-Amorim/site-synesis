@@ -38,7 +38,7 @@ import Icon from '@/components/ui/icon';
 import Image from 'next/image';
 import { toast } from 'sonner';
 
-import type { AppCategory } from '@/lib/apps/registry';
+import type { AppAuthor, AppCategory } from '@/lib/apps/registry';
 import { APP_CATEGORIES } from '@/lib/apps/registry';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { MAILERLITE_SUBSCRIBER_FIELDS } from '@/lib/apps/mailerlite/types';
@@ -59,6 +59,7 @@ interface AppWithStatus {
   categories: AppCategory[];
   implemented: boolean;
   connected: boolean;
+  author?: AppAuthor;
 }
 
 interface MailerLiteGroup {
@@ -196,6 +197,24 @@ function AppCard({ app, onOpenSettings }: AppCardProps) {
         <p className="text-xs text-muted-foreground line-clamp-2">
           {app.description}
         </p>
+        {app.author && (
+          <p className="text-[11px] text-muted-foreground/60 mt-1">
+            by{' '}
+            {app.author.url ? (
+              <a
+                href={app.author.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-muted-foreground transition-colors"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {app.author.name}
+              </a>
+            ) : (
+              app.author.name
+            )}
+          </p>
+        )}
       </div>
     </div>
   );

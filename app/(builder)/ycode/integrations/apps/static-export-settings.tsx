@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -19,7 +19,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
-import type { ExportConfig, OutputTarget } from '@/lib/apps/static-export/types'
+import type { ExportConfig, ExportJob, OutputTarget } from '@/lib/apps/static-export/types'
 
 const DEFAULT_CONFIG: ExportConfig = {
   outputTargets: ['local'],
@@ -150,40 +150,98 @@ export default function StaticExportSettings() {
   }
 
   // =========================================================================
-  // Export Now
+  // Export Now + status polling
   // =========================================================================
+
+  const [exportStatus, setExportStatus] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => stopPolling()
+  }, [stopPolling])
+
+  const pollExportStatus = useCallback((jobId: string) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch('/ycode/api/apps/static-export/status')
+        const result = await res.json()
+        const job = result.data as ExportJob | null
+        if (!job || job.id !== jobId) return
+
+        if (job.status === 'completed') {
+          stopPolling()
+          setIsExporting(false)
+          if (job.pagesExported === 0) {
+            setExportStatus('No published pages found')
+            toast.warning('Export completed', {
+              description: 'No published pages were found. Publish your site first.',
+            })
+          } else {
+            setExportStatus(`${job.pagesExported} pages → ${job.filesWritten} files`)
+            toast.success('Export completed', {
+              description: `Exported ${job.pagesExported} page${job.pagesExported === 1 ? '' : 's'} → ${job.filesWritten} file${job.filesWritten === 1 ? '' : 's'}.`,
+            })
+          }
+        } else if (job.status === 'failed') {
+          stopPolling()
+          setIsExporting(false)
+          setExportStatus(null)
+          toast.error('Export failed', {
+            description: job.error || 'The export encountered an error.',
+          })
+        }
+      } catch {
+        // Poll failure is transient — keep trying
+      }
+    }, 1500)
+  }, [stopPolling])
 
   const handleExport = async () => {
     setIsExporting(true)
+    setExportStatus(null)
     try {
       if (hasChanges) {
-        await fetch('/ycode/api/apps/static-export/settings', {
+        const saveRes = await fetch('/ycode/api/apps/static-export/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(config),
         })
+        if (saveRes.ok) {
+          setSavedConfig({ ...config })
+          setIsConnected(true)
+        }
       }
 
       const response = await fetch('/ycode/api/apps/static-export/export', {
         method: 'POST',
       })
 
-      const result = await response.json()
-
       if (response.ok) {
-        toast.success('Export started', {
-          description: result.data?.message || 'Static site export has been triggered.',
-        })
+        const statusRes = await fetch('/ycode/api/apps/static-export/status')
+        const statusResult = await statusRes.json()
+        const job = statusResult.data as ExportJob | null
+        if (job?.id) {
+          pollExportStatus(job.id)
+        }
       } else {
+        const result = await response.json().catch(() => ({}))
         toast.error('Export failed', {
           description: result.error || 'The export service returned an error.',
         })
+        setIsExporting(false)
       }
     } catch {
       toast.error('Export failed', {
         description: 'Could not reach the export service.',
       })
-    } finally {
       setIsExporting(false)
     }
   }
@@ -422,24 +480,29 @@ export default function StaticExportSettings() {
         )}
 
         {/* Actions */}
-        <div className="flex gap-2 pt-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleExport}
-            disabled={isExporting || config.outputTargets.length === 0}
-          >
-            {isExporting && <Spinner className="size-3" />}
-            Export Now
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleSave}
-            disabled={!hasChanges || isSaving}
-          >
-            {isSaving && <Spinner className="size-3" />}
-            Save
-          </Button>
+        <div className="space-y-2 pt-2">
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExport}
+              disabled={isExporting || config.outputTargets.length === 0}
+            >
+              {isExporting && <Spinner className="size-3" />}
+              {isExporting ? 'Exporting…' : 'Export Now'}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={!hasChanges || isSaving}
+            >
+              {isSaving && <Spinner className="size-3" />}
+              Save
+            </Button>
+          </div>
+          {exportStatus && (
+            <p className="text-[11px] text-muted-foreground">{exportStatus}</p>
+          )}
         </div>
       </div>
 

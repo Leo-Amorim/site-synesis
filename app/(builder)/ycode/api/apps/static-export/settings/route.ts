@@ -32,7 +32,7 @@ export async function GET() {
 const ALLOWED_TARGETS = ['local', 's3', 'github'] as const;
 const GITHUB_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const GITHUB_BRANCH_RE = /^[A-Za-z0-9._/-]+$/;
-const GITHUB_TOKEN_RE = /^[A-Za-z0-9_-]+$/;
+const GITHUB_TOKEN_RE = /^[A-Za-z0-9_.=-]+$/;
 
 export async function PUT(request: NextRequest) {
   try {
@@ -51,6 +51,21 @@ export async function PUT(request: NextRequest) {
     if (body.outputTargets.includes('local')) {
       if (typeof body.localPath !== 'string' || !body.localPath.trim()) {
         return noCache({ error: 'localPath is required when "local" is a target' }, 400);
+      }
+    }
+
+    if (body.outputTargets.includes('s3')) {
+      if (typeof body.s3Bucket !== 'string' || !body.s3Bucket.trim()) {
+        return noCache({ error: 's3Bucket is required when "s3" is a target' }, 400);
+      }
+      if (typeof body.s3Region !== 'string' || !body.s3Region.trim()) {
+        return noCache({ error: 's3Region is required when "s3" is a target' }, 400);
+      }
+      if (typeof body.s3AccessKey !== 'string' || !body.s3AccessKey.trim()) {
+        return noCache({ error: 's3AccessKey is required when "s3" is a target' }, 400);
+      }
+      if (typeof body.s3SecretKey !== 'string' || !body.s3SecretKey.trim()) {
+        return noCache({ error: 's3SecretKey is required when "s3" is a target' }, 400);
       }
     }
 
