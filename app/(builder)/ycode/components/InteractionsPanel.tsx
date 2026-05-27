@@ -75,6 +75,8 @@ import {
   parseAnimationValue,
   formatAnimationValue,
   setColorVariableResolver,
+  isFilterPropertyKey,
+  buildFilterString,
 } from '@/lib/animation-utils';
 import type { TriggerType, PropertyType, ParsedAnimationValue } from '@/lib/animation-utils';
 
@@ -2157,9 +2159,27 @@ export default function InteractionsPanel({
                         });
                       };
 
-                      const applyPreview = (value: string | null) => {
+                      const applyPreview = (value: string | null, side: 'from' | 'to' = 'to') => {
                         if (prop.key === 'display') return;
                         if (value === null || value === undefined) return;
+
+                        // Filter sub-properties share a single CSS `filter` declaration —
+                        // compose the full filter string from the tween's other filter
+                        // values so the preview reflects the combined effect.
+                        if (isFilterPropertyKey(prop.key)) {
+                          const base = side === 'from' ? selectedTween.from : selectedTween.to;
+                          const composed = { ...base, [prop.key]: value };
+                          const filterStr = buildFilterString(composed);
+                          if (filterStr !== null) {
+                            applyPreviewStyles(
+                              selectedTween.layer_id,
+                              { filter: filterStr },
+                              { splitText: selectedTween.splitText, duration: selectedTween.duration }
+                            );
+                          }
+                          return;
+                        }
+
                         const gsapValue = toGsapValue(value, prop);
                         if (gsapValue !== undefined) {
                           applyPreviewStyles(
@@ -2173,12 +2193,12 @@ export default function InteractionsPanel({
                       const handlePreviewFrom = () => {
                         if (isFromCurrent) return;
                         clearAllPreviewStyles();
-                        applyPreview(fromValue as string);
+                        applyPreview(fromValue as string, 'from');
                       };
 
                       const handlePreviewTo = () => {
                         clearAllPreviewStyles();
-                        applyPreview(selectedTween.to[prop.key] as string);
+                        applyPreview(selectedTween.to[prop.key] as string, 'to');
                       };
 
                       /** Helper to update property and apply preview after iframe re-renders */
@@ -2237,24 +2257,24 @@ export default function InteractionsPanel({
 
                       const handleFromChange = (value: string) => {
                         const resolved = resolveValue(value, parsedFrom);
-                        handlePropertyChange(() => setFromValue(resolved), () => applyPreview(resolved));
+                        handlePropertyChange(() => setFromValue(resolved), () => applyPreview(resolved, 'from'));
                       };
 
                       const handleFromUnitChange = (newUnit: string) => {
                         if (!parsedFrom) return;
                         const resolved = formatAnimationValue(parsedFrom.number, newUnit);
-                        handlePropertyChange(() => setFromValue(resolved), () => applyPreview(resolved));
+                        handlePropertyChange(() => setFromValue(resolved), () => applyPreview(resolved, 'from'));
                       };
 
                       const handleToChange = (value: string) => {
                         const resolved = resolveValue(value, parsedTo);
-                        handlePropertyChange(() => setToValue(resolved), () => applyPreview(resolved));
+                        handlePropertyChange(() => setToValue(resolved), () => applyPreview(resolved, 'to'));
                       };
 
                       const handleToUnitChange = (newUnit: string) => {
                         if (!parsedTo) return;
                         const resolved = formatAnimationValue(parsedTo.number, newUnit);
-                        handlePropertyChange(() => setToValue(resolved), () => applyPreview(resolved));
+                        handlePropertyChange(() => setToValue(resolved), () => applyPreview(resolved, 'to'));
                       };
 
                       /** Deferred blur: clears preview after pending RAF callbacks complete */
