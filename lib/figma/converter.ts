@@ -5,6 +5,7 @@ import type { YcodeFigmaPayload, FigmaNode, FigmaNodeType } from '@/lib/figma/ty
 import { generateId } from '@/lib/utils';
 import { designToClassString } from '@/lib/tailwind-class-mapper';
 import { mapLayout } from '@/lib/figma/layout-mapper';
+import type { ParentLayoutMode } from '@/lib/figma/layout-mapper';
 import { mapDesign } from '@/lib/figma/design-mapper';
 import { mapText } from '@/lib/figma/text-mapper';
 import { uploadFigmaImage, uploadFigmaSvg } from '@/lib/figma/image-handler';
@@ -26,11 +27,15 @@ function sanitizeCustomName(name: string): string {
   return name.trim().slice(0, 100);
 }
 
-async function convertNode(node: FigmaNode): Promise<Layer> {
+function getNodeLayoutMode(node: FigmaNode): ParentLayoutMode {
+  return node.layout?.mode ?? 'NONE';
+}
+
+async function convertNode(node: FigmaNode, parentLayoutMode: ParentLayoutMode = 'NONE'): Promise<Layer> {
   const id = generateId('lyr');
   const design: DesignProperties = {};
 
-  const { layout, spacing, sizing, positioning } = mapLayout(node);
+  const { layout, spacing, sizing, positioning } = mapLayout(node, parentLayoutMode);
   if (layout) design.layout = layout;
   if (spacing) design.spacing = spacing;
   if (sizing) design.sizing = sizing;
@@ -112,15 +117,24 @@ async function convertNode(node: FigmaNode): Promise<Layer> {
     }
   }
 
+  // Determine this node's layout mode so children know their parent context
+  const thisLayoutMode = getNodeLayoutMode(node);
+
   if (CONTAINER_TYPES.has(node.type) || node.type === 'RECTANGLE' || node.type === 'ELLIPSE') {
     layer.children = [];
     if (node.children?.length) {
-      const childLayers = await Promise.all(node.children.map(convertNode));
+      const childLayers = await Promise.all(
+        node.children.map((child) => convertNode(child, thisLayoutMode))
+      );
       layer.children = childLayers;
     }
   }
 
   layer.classes = designToClassString(design);
+
+  console.log(`[FigmaConvert] ${node.type} "${node.name}" (parent: ${parentLayoutMode})`, {
+    classes: layer.classes,
+  });
 
   if (!node.visible) {
     layer.settings = { ...layer.settings, hidden: true };
@@ -130,5 +144,10 @@ async function convertNode(node: FigmaNode): Promise<Layer> {
 }
 
 export async function convertFigmaToLayers(payload: YcodeFigmaPayload): Promise<Layer[]> {
-  return Promise.all(payload.nodes.map(convertNode));
+  console.log('[FigmaConvert] payload:', payload.nodes.length, 'nodes');
+  // Top-level nodes have no parent layout — they'll be inserted into Ycode's body
+  const layers = await Promise.all(
+    payload.nodes.map((node) => convertNode(node, 'NONE'))
+  );
+  return layers;
 }
