@@ -55,7 +55,17 @@ export function useFigmaPaste({
   const isProcessingRef = useRef(false);
 
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
-    if (!enabled || isProcessingRef.current) return;
+    console.log('[FigmaPaste] paste event fired', {
+      enabled,
+      isProcessing: isProcessingRef.current,
+      hasClipboardData: !!e.clipboardData,
+      types: e.clipboardData?.types,
+    });
+
+    if (!enabled || isProcessingRef.current) {
+      console.log('[FigmaPaste] skipped — enabled:', enabled, 'isProcessing:', isProcessingRef.current);
+      return;
+    }
 
     const target = e.target as HTMLElement;
     if (
@@ -64,19 +74,32 @@ export function useFigmaPaste({
         target.tagName === 'TEXTAREA' ||
         target.isContentEditable)
     ) {
+      console.log('[FigmaPaste] skipped — input focused:', target.tagName);
       return;
     }
 
     e.preventDefault();
 
     if (!e.clipboardData) {
+      console.log('[FigmaPaste] no clipboardData, falling through to normal paste');
       onNormalPaste();
       return;
     }
 
+    const html = e.clipboardData.getData('text/html');
+    const text = e.clipboardData.getData('text/plain');
+    console.log('[FigmaPaste] clipboard contents:', {
+      htmlLength: html?.length,
+      htmlPreview: html?.substring(0, 200),
+      textLength: text?.length,
+      textPreview: text?.substring(0, 200),
+    });
+
     const payload = extractFigmaPayload(e.clipboardData);
+    console.log('[FigmaPaste] extracted payload:', payload ? `${payload.nodes.length} nodes` : 'null');
 
     if (!payload) {
+      console.log('[FigmaPaste] no Figma data found, falling through to normal paste');
       onNormalPaste();
       return;
     }
