@@ -847,6 +847,20 @@ export default function InteractionsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedInteractionId]);
 
+  // Reverse sync: when the trigger is locked (event selected) and the selected layer
+  // changes, select the matching animated layer in the Animations section, or clear
+  // the selection when the layer is not animated
+  useEffect(() => {
+    if (!selectedInteractionId) return;
+    const interaction = interactions.find((i) => i.id === selectedInteractionId);
+    const tweens = interaction?.tweens || [];
+    // Keep current selection if it already targets the layer (supports multiple tweens per layer)
+    const currentTween = tweens.find((t) => t.id === selectedTweenId);
+    if (currentTween && currentTween.layer_id === selectedLayerId) return;
+    const matchingTween = tweens.find((t) => t.layer_id === selectedLayerId);
+    setSelectedTweenId(matchingTween ? matchingTween.id : null);
+  }, [selectedLayerId, selectedInteractionId, selectedTweenId, interactions]);
+
   // Notify parent about state changes
   useEffect(() => {
     onStateChange?.({
@@ -1709,6 +1723,11 @@ export default function InteractionsPanel({
               <Button
                 size="xs"
                 variant="secondary"
+                className={cn(
+                  selectedLayerId &&
+                    !(selectedInteraction.tweens || []).some((t) => t.layer_id === selectedLayerId) &&
+                    'bg-teal-500/50 text-white hover:bg-teal-500/60'
+                )}
                 onClick={handleAddTween}
                 disabled={!selectedLayerId}
               >
