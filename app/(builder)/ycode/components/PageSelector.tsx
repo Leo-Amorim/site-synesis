@@ -127,8 +127,13 @@ const TreeRow = memo(function TreeRow({ node, depth, isCollapsed, isSelected }: 
           className={cn('size-3 mr-0.5', isSelected ? 'opacity-90' : 'opacity-50')}
         />
 
-        <span className="grow text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap pointer-events-none">
-          {isFolder ? (node.data as PageFolder).name : (node.data as Page).name}
+        <span className="grow flex items-center gap-2 min-w-0 pr-4 pointer-events-none">
+          <span className="text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
+            {isFolder ? (node.data as PageFolder).name : (node.data as Page).name}
+          </span>
+          {!isFolder && (node.data as Page).is_publishable === false && (
+            <Icon name="eye-off" className="size-3.5 shrink-0 opacity-70" />
+          )}
         </span>
 
         {isSelected && (
@@ -385,6 +390,9 @@ function PageSelectorImpl({
                   className="size-3 opacity-50 shrink-0"
                 />
                 <span className="truncate">{selectedPage.name}</span>
+                {selectedPage.is_publishable === false && (
+                  <Icon name="eye-off" className="size-3.5 shrink-0 opacity-70" />
+                )}
               </>
             ) : (
               <span className="truncate">{placeholder}</span>

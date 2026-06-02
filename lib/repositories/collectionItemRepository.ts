@@ -1310,27 +1310,46 @@ export async function getTotalPublishableItemsCount(): Promise<number> {
 
   const collectionIds = collections.map(c => c.id);
 
-  const [draftResult, publishedResult] = await Promise.all([
-    client
-      .from('collection_items')
-      .select('id, manual_order')
-      .in('collection_id', collectionIds)
-      .eq('is_published', false)
-      .eq('is_publishable', true)
-      .is('deleted_at', null),
-    client
-      .from('collection_items')
-      .select('id, manual_order')
-      .in('collection_id', collectionIds)
-      .eq('is_published', true),
+  // Paginate both queries to avoid PostgREST's default 1000-row limit
+  const fetchAllItems = async (isPublished: boolean): Promise<Array<{ id: string; manual_order: number }>> => {
+    const rows: Array<{ id: string; manual_order: number }> = [];
+    let offset = 0;
+
+    while (true) {
+      let query = client
+        .from('collection_items')
+        .select('id, manual_order')
+        .in('collection_id', collectionIds)
+        .eq('is_published', isPublished)
+        .order('id', { ascending: true })
+        .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+
+      if (!isPublished) {
+        query = query.eq('is_publishable', true).is('deleted_at', null);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`Failed to fetch ${isPublished ? 'published' : 'draft'} items: ${error.message}`);
+      }
+
+      const batch = data || [];
+      rows.push(...batch);
+
+      if (batch.length < SUPABASE_QUERY_LIMIT) break;
+      offset += SUPABASE_QUERY_LIMIT;
+    }
+
+    return rows;
+  };
+
+  const [draftItems, publishedItems] = await Promise.all([
+    fetchAllItems(false),
+    fetchAllItems(true),
   ]);
 
-  if (draftResult.error) {
-    throw new Error(`Failed to fetch draft items: ${draftResult.error.message}`);
-  }
-
   const publishedMap = new Map<string, number>();
-  for (const pub of publishedResult.data || []) {
+  for (const pub of publishedItems) {
     publishedMap.set(pub.id, pub.manual_order);
   }
 
@@ -1338,7 +1357,7 @@ export async function getTotalPublishableItemsCount(): Promise<number> {
   let count = 0;
   const matchingOrderItemIds: string[] = [];
 
-  for (const draft of draftResult.data || []) {
+  for (const draft of draftItems) {
     const pubOrder = publishedMap.get(draft.id);
     if (pubOrder === undefined || draft.manual_order !== pubOrder) {
       count++;

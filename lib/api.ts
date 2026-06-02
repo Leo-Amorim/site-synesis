@@ -118,6 +118,14 @@ export const pagesApi = {
   async getUnpublished(): Promise<ApiResponse<Page[]>> {
     return apiRequest<Page[]>('/ycode/api/pages/unpublished');
   },
+
+  // Change a page's publish status (draft / stage / publish) in real time
+  async setPageStatus(id: string, action: StatusAction): Promise<ApiResponse<Page>> {
+    return apiRequest<Page>(`/ycode/api/pages/${id}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    });
+  },
 };
 
 // Folders API

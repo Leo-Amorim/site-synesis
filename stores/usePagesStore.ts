@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import type { Layer, Page, PageLayers, PageFolder, PageItemDuplicateResult, CollectionItemWithValues } from '../types';
 import { pagesApi, pageLayersApi, foldersApi } from '../lib/api';
+import { getStatusFlagsFromAction, type StatusAction } from '../lib/collection-field-utils';
 import { getLayerFromTemplate, getBlockName } from '../lib/templates/blocks';
 import { cloneDeep } from 'lodash';
 import {
@@ -79,6 +80,7 @@ interface PagesActions {
   updateLayerClasses: (pageId: string, layerId: string, classes: string) => void;
   saveDraft: (pageId: string) => Promise<void>;
   publishPage: (pageId: string) => Promise<void>;
+  setPageStatus: (pageId: string, action: StatusAction) => Promise<void>;
   addLayer: (pageId: string, parentLayerId: string | null, layerName: string) => void;
   addLayerWithId: (pageId: string, parentLayerId: string | null, layer: Layer) => void;
 
@@ -572,6 +574,44 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
       set({ isLoading: false });
     } catch (error) {
       set({ error: 'Failed to publish page', isLoading: false });
+    }
+  },
+
+  setPageStatus: async (pageId, action) => {
+    const previousPages = get().pages;
+    const previousPage = previousPages.find(p => p.id === pageId);
+    const { isPublishable, isPublished } = getStatusFlagsFromAction(action);
+
+    // Optimistically reflect the new status; clear modified since it now matches
+    set(state => ({
+      pages: state.pages.map(p =>
+        p.id === pageId
+          ? { ...p, is_publishable: isPublishable, has_published_version: isPublished, is_modified: false }
+          : p
+      ),
+    }));
+
+    try {
+      const response = await pagesApi.setPageStatus(pageId, action);
+      if (response.error) {
+        throw new Error(response.error);
+      }
+
+      // Replace with server response for accurate computed status
+      const serverPage = response.data;
+      if (serverPage) {
+        set(state => ({
+          pages: state.pages.map(p => (p.id === pageId ? serverPage : p)),
+        }));
+      }
+    } catch (error) {
+      // Revert optimistic update
+      if (previousPage) {
+        set(state => ({
+          pages: state.pages.map(p => (p.id === pageId ? previousPage : p)),
+          error: error instanceof Error ? error.message : 'Failed to update page status',
+        }));
+      }
     }
   },
 
@@ -1918,6 +1958,7 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
       name: `${originalPage.name} (Copy)`,
       slug: `${originalPage.slug}-copy-${Date.now()}`,
       is_published: false,
+      is_publishable: originalPage.is_publishable ?? true,
       page_folder_id: originalPage.page_folder_id,
       order: newOrder, // Place right after original
       depth: originalPage.depth,

@@ -156,6 +156,7 @@ export async function POST(request: NextRequest) {
     const changedLayerStyleIds: string[] = [];
     const deletedCollectionItemSlugs: Map<string, string[]> = new Map();
     const renamedPageOldRoutes: string[] = [];
+    const unpublishedPageRoutes: string[] = [];
     let localisationResult: PublishLocalisationResult | null = null;
 
     // Backfill any missing content_hash values before publish so change
@@ -186,6 +187,7 @@ export async function POST(request: NextRequest) {
         const pagesResult = await publishPages(pageIds);
         publishedPageIds.push(...pagesResult.changedPageIds);
         renamedPageOldRoutes.push(...pagesResult.renamedPageOldRoutes);
+        unpublishedPageRoutes.push(...pagesResult.unpublishedPageRoutes);
         result.changes.pages = pagesResult.count;
         stats.tables.pages.added = pagesResult.count;
         stats.tables.pages.durationMs = pagesResult.timing.pagesDurationMs;
@@ -198,6 +200,7 @@ export async function POST(request: NextRequest) {
           const pagesResult = await publishPages(allPageIds);
           publishedPageIds.push(...pagesResult.changedPageIds);
           renamedPageOldRoutes.push(...pagesResult.renamedPageOldRoutes);
+          unpublishedPageRoutes.push(...pagesResult.unpublishedPageRoutes);
           result.changes.pages = pagesResult.count;
           stats.tables.pages.added = pagesResult.count;
           stats.tables.pages.durationMs = pagesResult.timing.pagesDurationMs;
@@ -701,6 +704,13 @@ export async function POST(request: NextRequest) {
           await invalidatePages(renamedPageOldRoutes);
           invalidationResult.invalidatedRoutes.push(...renamedPageOldRoutes);
           console.log(`[Cache] invalidated ${renamedPageOldRoutes.length} renamed page old route(s)`);
+        }
+
+        // Routes of pages removed from the live site (set to draft)
+        if (unpublishedPageRoutes.length > 0) {
+          await invalidatePages(unpublishedPageRoutes);
+          invalidationResult.invalidatedRoutes.push(...unpublishedPageRoutes);
+          console.log(`[Cache] invalidated ${unpublishedPageRoutes.length} unpublished page route(s)`);
         }
 
         // Deleted CMS item routes (old slugs that should no longer exist)

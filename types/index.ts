@@ -697,6 +697,9 @@ export interface Page {
   settings: PageSettings; // Page settings (CMS, auth, seo, custom code)
   content_hash?: string; // SHA-256 hash of page metadata for change detection
   is_published: boolean;
+  is_publishable: boolean; // Whether the page goes live on publish (false = draft)
+  has_published_version?: boolean; // Computed (builder listing only): a live row exists
+  is_modified?: boolean; // Computed (builder listing only): draft differs from live
   created_at: string;
   updated_at: string;
   deleted_at: string | null; // Soft delete timestamp

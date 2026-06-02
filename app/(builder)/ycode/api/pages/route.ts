@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getAllPages, createPage } from '@/lib/repositories/pageRepository';
+import { getAllPages, createPage, enrichDraftPagesWithPublishStatus } from '@/lib/repositories/pageRepository';
 import { upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { noCache } from '@/lib/api-response';
 
@@ -47,8 +47,13 @@ export async function GET(request: NextRequest) {
 
     const pages = await getAllPages(filters);
 
+    // Draft listing powers the builder: annotate with computed publish status
+    const data = filters.is_published === false
+      ? await enrichDraftPagesWithPublishStatus(pages)
+      : pages;
+
     return noCache({
-      data: pages,
+      data,
     });
   } catch (error) {
     console.error('[GET /ycode/api/pages] Error:', error);

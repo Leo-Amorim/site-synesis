@@ -20,6 +20,7 @@ import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { Separator } from '@/components/ui/separator';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { generateUniqueSlug, generateUniqueFolderSlug, getNextNumberFromNames, getParentContextFromSelection, calculateNextOrder, findNextSelection } from '@/lib/page-utils';
+import type { StatusAction } from '@/lib/collection-field-utils';
 
 export interface LeftSidebarPagesHandle {
   checkAndCloseSettings: () => Promise<boolean>;
@@ -142,6 +143,7 @@ const LeftSidebarPages = React.forwardRef<LeftSidebarPagesHandle, LeftSidebarPag
   const updateFolder = usePagesStore((s) => s.updateFolder);
   const duplicateFolder = usePagesStore((s) => s.duplicateFolder);
   const deleteFolder = usePagesStore((s) => s.deleteFolder);
+  const setPageStatus = usePagesStore((s) => s.setPageStatus);
   const batchReorderPagesAndFolders = usePagesStore((s) => s.batchReorderPagesAndFolders);
   const collections = useCollectionsStore((s) => s.collections);
   const fields = useCollectionsStore((s) => s.fields);
@@ -195,6 +197,7 @@ const LeftSidebarPages = React.forwardRef<LeftSidebarPagesHandle, LeftSidebarPag
       name: newPageName,
       slug: newPageSlug,
       is_published: false,
+      is_publishable: true,
       page_folder_id: parentFolderId,
       order: newOrder,
       depth: newDepth,
@@ -383,13 +386,17 @@ const LeftSidebarPages = React.forwardRef<LeftSidebarPagesHandle, LeftSidebarPag
   const handleSavePage = async (data: PageFormData) => {
     if (!editingPage) return;
 
-    const pageUpdates = {
+    const pageUpdates: Partial<Page> = {
       name: data.name,
       slug: data.slug,
       page_folder_id: data.page_folder_id,
       is_index: data.is_index,
       settings: data.settings,
     };
+
+    if (data.is_publishable !== undefined) {
+      pageUpdates.is_publishable = data.is_publishable;
+    }
 
     // Update in background
     const result = await updatePage(editingPage.id, pageUpdates);
@@ -572,6 +579,10 @@ const LeftSidebarPages = React.forwardRef<LeftSidebarPagesHandle, LeftSidebarPag
       }
     }
   }, [pages, folders, pendingDuplicateSelection]);
+
+  const handleStatusChange = (id: string, action: StatusAction) => {
+    void setPageStatus(id, action);
+  };
 
   const handleDuplicate = async (id: string, type: 'folder' | 'page') => {
     if (type === 'folder') {
@@ -846,6 +857,7 @@ const LeftSidebarPages = React.forwardRef<LeftSidebarPagesHandle, LeftSidebarPag
           onFolderSettings={handleEditFolder}
           onDuplicate={readOnly ? undefined : handleDuplicate}
           onDelete={readOnly ? undefined : deletePageOrFolderItem}
+          onStatusChange={readOnly ? undefined : handleStatusChange}
         />
 
         <div className="flex items-center gap-2 mt-2">

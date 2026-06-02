@@ -1,6 +1,13 @@
 import { NextRequest } from 'next/server';
-import { getPageById, updatePage, deletePage } from '@/lib/repositories/pageRepository';
+import {
+  getPageById,
+  updatePage,
+  deletePage,
+  deletePublishedPage,
+  enrichDraftPagesWithPublishStatus,
+} from '@/lib/repositories/pageRepository';
 import { deleteTranslationsInBulk } from '@/lib/repositories/translationRepository';
+import { getRoutePathsForPages, invalidatePages } from '@/lib/services/cacheService';
 import { noCache } from '@/lib/api-response';
 
 // Disable caching for this route
@@ -95,11 +102,46 @@ export async function PUT(
       body.slug = '*';
     }
 
+    // The homepage and error pages must always stay live, so they can never be
+    // turned into a draft regardless of what the client sends.
+    const targetFolderId = body.page_folder_id !== undefined ? body.page_folder_id : currentPage.page_folder_id;
+    const willBeHomepage = isIndexPage && targetFolderId === null;
+    if ((isErrorPage || willBeHomepage) && body.is_publishable === false) {
+      body.is_publishable = true;
+    }
+
+    // Detect a live -> draft transition so we can unpublish in the same request
+    const isUnpublishing = body.is_publishable === false && currentPage.is_publishable !== false;
+
     // Pass all updates to the repository (it will handle further validation)
     const page = await updatePage(id, body);
 
+    // When a page becomes a draft, remove its live version and purge its cache.
+    // Routes are resolved before deletion so the stale URLs can be invalidated.
+    if (isUnpublishing) {
+      let routes: string[] = [];
+      try {
+        routes = await getRoutePathsForPages([id]);
+      } catch {
+        // Non-fatal: route resolution failure should not block the update
+      }
+
+      await deletePublishedPage(id);
+
+      if (routes.length > 0) {
+        try {
+          await invalidatePages(routes);
+        } catch {
+          // Non-fatal
+        }
+      }
+    }
+
+    // Return the page with computed publish status for the builder listing
+    const [enriched] = await enrichDraftPagesWithPublishStatus([page]);
+
     return noCache({
-      data: page,
+      data: enriched ?? page,
     });
   } catch (error) {
     console.error('Failed to update page:', error);

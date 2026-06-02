@@ -163,6 +163,8 @@ export interface PublishPagesResult {
   changedPageIds: string[];
   /** Route paths that no longer exist because a page's slug or folder changed */
   renamedPageOldRoutes: string[];
+  /** Route paths removed from the live site because a page was set to draft */
+  unpublishedPageRoutes: string[];
   timing: {
     pagesDurationMs: number;
     layersDurationMs: number;
@@ -179,7 +181,7 @@ export interface PublishPagesResult {
  */
 export async function publishPages(pageIds: string[]): Promise<PublishPagesResult> {
   if (pageIds.length === 0) {
-    return { count: 0, changedPageIds: [], renamedPageOldRoutes: [], timing: { pagesDurationMs: 0, layersDurationMs: 0, layersCount: 0 } };
+    return { count: 0, changedPageIds: [], renamedPageOldRoutes: [], unpublishedPageRoutes: [], timing: { pagesDurationMs: 0, layersDurationMs: 0, layersCount: 0 } };
   }
 
   // Import folder functions
@@ -206,12 +208,46 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
   }
 
   // Filter valid draft pages
-  const validDraftPages = (draftPagesData || []).filter(
+  const allValidDraftPages = (draftPagesData || []).filter(
     (page) => !page.deleted_at && !page.is_published
   );
 
+  // Split by publish status: only publishable pages go live; pages set to draft
+  // are skipped and their existing live version is removed (mirrors CMS items).
+  const validDraftPages = allValidDraftPages.filter((page) => page.is_publishable !== false);
+  const nonPublishableDraftPages = allValidDraftPages.filter((page) => page.is_publishable === false);
+
+  // Remove live versions of pages that are now drafts, capturing their routes
+  // first so the publish route can purge the stale caches.
+  const unpublishedPageRoutes: string[] = [];
+  if (nonPublishableDraftPages.length > 0) {
+    const draftIds = nonPublishableDraftPages.map((p) => p.id);
+    const { data: livePages } = await client
+      .from('pages')
+      .select('id')
+      .in('id', draftIds)
+      .eq('is_published', true);
+
+    const livePageIds = (livePages || []).map((p) => p.id);
+    if (livePageIds.length > 0) {
+      try {
+        const { getRoutePathsForPages } = await import('@/lib/services/cacheService');
+        unpublishedPageRoutes.push(...(await getRoutePathsForPages(livePageIds)));
+      } catch {
+        // Non-fatal: route resolution failure should not block removal
+      }
+
+      // Delete live rows (page_layers removed via ON DELETE CASCADE)
+      await client
+        .from('pages')
+        .delete()
+        .in('id', livePageIds)
+        .eq('is_published', true);
+    }
+  }
+
   if (validDraftPages.length === 0) {
-    return { count: 0, changedPageIds: [], renamedPageOldRoutes: [], timing: { pagesDurationMs: 0, layersDurationMs: 0, layersCount: 0 } };
+    return { count: 0, changedPageIds: [], renamedPageOldRoutes: [], unpublishedPageRoutes, timing: { pagesDurationMs: 0, layersDurationMs: 0, layersCount: 0 } };
   }
 
   // Step 2: Collect all unique folder IDs from pages
@@ -516,6 +552,7 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
     count: pagesToUpsert.length,
     changedPageIds: allChangedIds,
     renamedPageOldRoutes,
+    unpublishedPageRoutes,
     timing: {
       pagesDurationMs,
       layersDurationMs,
