@@ -27,7 +27,13 @@ export interface XscpNodeData {
   tag?: string;
   displayName?: string;
   attr?: Record<string, string>;
+  /** Custom HTML attributes; `{ name: 'class', value: '…' }` carries class names. */
+  xattr?: Array<{ name: string; value: string }>;
+  /** Raw DOM attributes (used by `DOM` nodes, e.g. rebuilt inline SVGs). */
+  attributes?: Array<{ name: string; value: string }>;
   link?: { mode?: string; href?: string; target?: string };
+  /** Set on `Link` nodes that Webflow treats as buttons (`.w-button`). */
+  button?: boolean;
   img?: { id?: string };
   dyn?: { type?: string; grid?: number };
   widget?: { type?: string; icon?: string };
@@ -49,6 +55,8 @@ export interface XscpStyle {
 }
 
 export interface XscpAsset {
+  /** Webflow asset id, referenced by `data.img.id` and `@img_<id>` in CSS. */
+  _id?: string;
   cdnUrl?: string;
   fileName?: string;
   width?: number;
@@ -72,7 +80,17 @@ export interface WebflowParseContext {
   byId: Map<string, XscpNode>;
   /** Resolve a Webflow class id to a reusable style ref (null if unknown/empty). */
   resolveStyle: (classId: string) => ImportStyleRef | null;
+  /** Resolve a class *name* (from a node's `xattr`) to a reusable style ref. */
+  resolveStyleByName: (className: string) => ImportStyleRef | null;
   /** Resolve a node's class id list into style refs (base first). */
   resolveStyles: (classIds: string[] | undefined) => ImportStyleRef[];
+  /** Resolve a Webflow asset id to its absolute CDN URL (undefined if unknown). */
+  resolveAssetUrl: (assetId: string) => string | undefined;
+  /**
+   * Tailwind classes for a tag's global-stylesheet rule (e.g. `h2` → the site's
+   * heading color/spacing), applied as lowest-priority `frameworkClasses`.
+   * Empty when no stylesheet is available or the tag has no global rule.
+   */
+  tagFramework: (tag?: string) => string[];
   buildNode: (node: XscpNode | undefined) => ImportNode | null;
 }

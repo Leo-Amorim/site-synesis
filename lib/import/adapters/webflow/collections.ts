@@ -24,6 +24,13 @@ export function isCollectionWrapper(type?: string): boolean {
  * placeholder node. The item template is preserved when present (it is usually
  * stripped to empty by Webflow).
  */
+/** Base (non-combo) class name of a node — Webflow's navigator label. */
+function baseName(node: XscpNode, ctx: WebflowParseContext): string | undefined {
+  const refs = ctx.resolveStyles(node.classes);
+  const base = refs.find((r) => !r.combo) ?? refs[0];
+  return base?.name || undefined;
+}
+
 export function buildCollectionNode(wrapper: XscpNode, ctx: WebflowParseContext): ImportNode {
   const wrapperStyles = ctx.resolveStyles(wrapper.classes);
   const childNodes = (wrapper.children ?? []).map((id) => ctx.byId.get(id)).filter(Boolean) as XscpNode[];
@@ -36,6 +43,9 @@ export function buildCollectionNode(wrapper: XscpNode, ctx: WebflowParseContext)
     const listChildren = (listNode.children ?? []).map((id) => ctx.byId.get(id)).filter(Boolean) as XscpNode[];
     const itemNode = listChildren.find((n) => n.type === 'DynamoItem');
 
+    // Webflow strips the item template DOM when a Collection List is copied out
+    // of its site, so `itemNode.children` is usually empty. We still preserve
+    // whatever survives.
     const template = itemNode
       ? ((itemNode.children ?? [])
         .map((id) => ctx.byId.get(id))
@@ -43,15 +53,22 @@ export function buildCollectionNode(wrapper: XscpNode, ctx: WebflowParseContext)
         .filter(Boolean) as ImportNode[])
       : [];
 
-    collection = { kind: 'collection', tag: 'div', styles: listStyles, children: template };
+    collection = {
+      kind: 'collection',
+      tag: 'div',
+      styles: listStyles,
+      displayName: baseName(listNode, ctx) ?? 'Collection List',
+      children: template,
+    };
   } else {
-    collection = { kind: 'collection', tag: 'div', children: [] };
+    collection = { kind: 'collection', tag: 'div', displayName: 'Collection List', children: [] };
   }
 
   return {
     kind: 'box',
     tag: wrapper.tag,
     styles: wrapperStyles,
+    displayName: baseName(wrapper, ctx) ?? 'Collection List Wrapper',
     children: [collection],
   };
 }

@@ -9,8 +9,7 @@
  * Generalised from the Figma materializer so both importers can share it.
  */
 
-import type { Component, ComponentVariable, Font, Layer, LayerStyle } from '@/types';
-import { assetsApi } from '@/lib/api';
+import type { Asset, Component, ComponentVariable, Font, Layer, LayerStyle } from '@/types';
 import { useLayerStylesStore } from '@/stores/useLayerStylesStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { useAssetsStore } from '@/stores/useAssetsStore';
@@ -29,7 +28,7 @@ export interface MaterializerCounts {
 export class ImportMaterializer {
   readonly counts: MaterializerCounts = { styles: 0, components: 0, assets: 0, fonts: 0 };
 
-  /** Reusable label for the source (used as the layer-style group). */
+  /** Source label (e.g. "Webflow") used to tag re-hosted assets. */
   private readonly group: string;
 
   /** Dedupe caches keyed by a stable identity. */
@@ -57,7 +56,9 @@ export class ImportMaterializer {
 
       const name = this.uniqueStyleName(ref.name || 'Imported');
       const design = buildDesign(classes);
-      const style = await useLayerStylesStore.getState().createStyle(name, classes, design, this.group);
+      // Leave imported styles ungrouped so they always surface in the layer
+      // style picker (grouped styles only show when that group is selected).
+      const style = await useLayerStylesStore.getState().createStyle(name, classes, design);
       if (style) this.counts.styles += 1;
       return style;
     })();
@@ -78,13 +79,24 @@ export class ImportMaterializer {
         const blob = await response.blob();
         const filename = decodeURIComponent(url.split('/').pop()?.split('?')[0] || 'image');
         const file = new File([blob], filename, { type: blob.type || 'image/png' });
-        const result = await assetsApi.upload(file, 'webflow-import');
-        if (result.data) {
-          useAssetsStore.getState().addAsset(result.data);
-          this.counts.assets += 1;
-          return result.data.id;
-        }
-        return null;
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('source', `${this.group.toLowerCase()}-import`);
+
+        const uploadResponse = await fetch('/ycode/api/files/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!uploadResponse.ok) return null;
+
+        const data = await uploadResponse.json();
+        const asset: Asset | undefined = data?.data;
+        if (!asset?.id) return null;
+
+        useAssetsStore.getState().addAsset(asset);
+        this.counts.assets += 1;
+        return asset.id;
       } catch {
         // CORS or network failure — caller falls back to the remote URL.
         return null;

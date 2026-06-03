@@ -25,7 +25,29 @@ import { YCODE_FIGMA_SIGNATURE, isYcodeFigmaPayload } from '@/lib/figma/types';
 import type { YcodeFigmaPayload } from '@/lib/figma/types';
 import { buildImport } from '@/lib/import';
 import { isWebflowClipboard, parseWebflowClipboard } from '@/lib/import/adapters/webflow';
+import { parseGlobalStylesheet, type GlobalStylesheet } from '@/lib/import/adapters/webflow/global-styles';
 import type { ImportSummary } from '@/lib/import/types';
+
+// EXPERIMENT: hard-coded published Webflow stylesheet so we can validate global
+// style backfill (section background, text colours, heading colours, fonts)
+// before building the per-site URL detection/storage flow.
+const EXPERIMENT_WEBFLOW_CSS_URL =
+  'https://cdn.prod.website-files.com/6a1ed0b072b68f131b8cd038/css/liams-dapper-site-aac62a.webflow.shared.333816452.css';
+
+/** Best-effort fetch + parse of the site stylesheet via the server proxy. */
+async function loadGlobalStylesheet(url: string): Promise<GlobalStylesheet | undefined> {
+  try {
+    const res = await fetch(`/ycode/api/apps/webflow/stylesheet?url=${encodeURIComponent(url)}`);
+    if (!res.ok) return undefined;
+    const json = await res.json();
+    const css: string | undefined = json?.data?.css;
+    if (!css) return undefined;
+    return parseGlobalStylesheet(css);
+  } catch (error) {
+    console.warn('[useImportPaste] global stylesheet load failed:', error);
+    return undefined;
+  }
+}
 
 interface UseImportPasteOptions {
   enabled: boolean;
@@ -156,7 +178,8 @@ export function useImportPaste({
     isProcessingRef.current = true;
     const toastId = toast.loading('Importing from Webflow…');
     try {
-      const document = parseWebflowClipboard(text);
+      const globalStyles = await loadGlobalStylesheet(EXPERIMENT_WEBFLOW_CSS_URL);
+      const document = parseWebflowClipboard(text, globalStyles);
       if (!document) {
         toast.error('Could not read the Webflow selection', { id: toastId });
         return;

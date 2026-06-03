@@ -122,6 +122,13 @@ function arb(val: string): string {
 function mapDeclaration(prop: string, val: string): string[] {
   const out: string[] = [];
 
+  // Gradient text: `background-clip: text` only reveals the gradient if the
+  // text fill is transparent. Emit the full Tailwind recipe so it's visible —
+  // a bare `background-clip: text` leaves the gradient hidden behind the text.
+  if ((prop === 'background-clip' || prop === '-webkit-background-clip') && val === 'text') {
+    return ['bg-clip-text', 'text-transparent'];
+  }
+
   const mapped =
     prop === 'display' ? DISPLAY_MAP[val] :
       prop === 'flex-direction' ? FLEX_DIR_MAP[val] :

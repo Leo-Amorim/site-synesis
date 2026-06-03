@@ -1,14 +1,25 @@
 /**
  * Structural re-componentization.
  *
- * Webflow flattens Symbols (and Figma loses component identity) on copy, so we
- * recover reusable components by detecting repeated sibling subtrees with an
- * identical *shape* and turning the leaves whose content differs between
- * instances into component variables (text / image / link).
+ * Webflow strips component (Symbol) identity from the clipboard on copy — the
+ * pasted JSON only ever contains flattened plain elements plus an
+ * `unlinkedSymbolCount`, never the component reference or definition (that lives
+ * in Webflow's internal store, which we can't read). So there is no way to know
+ * which elements were "real" Webflow components.
+ *
+ * The only honest signal we have is *repetition*: we recover reusable components
+ * by detecting repeated sibling subtrees with an identical shape and turning the
+ * leaves whose content differs between instances into component variables
+ * (text / image / link). To stay conservative we only do this for genuinely
+ * repeated, small-to-medium blocks (cards, slides, list items) — never whole
+ * page regions like sections, which are structure rather than reusable units.
  *
  * The first instance becomes the component definition; every instance is
  * replaced with a thin component-instance layer carrying per-instance
  * `componentOverrides`.
+ *
+ * Note: this is the shared (Webflow) path only. Figma componentizes off real
+ * `isInstance` identity in `lib/figma/converter.ts` and does not use this.
  */
 
 import { cloneDeep } from 'lodash';
@@ -19,6 +30,23 @@ import type { ImportMaterializer } from '@/lib/import/materializer';
 
 /** Minimum subtree size (node count) before a repeated shape is worth extracting. */
 const MIN_SUBTREE_NODES = 3;
+
+/**
+ * Upper subtree size bound. Above this, a repeated shape is almost certainly a
+ * coincidental page-region match (whole sections built alike) rather than a
+ * reusable component. Real repeated components are small/medium blocks. Tune as
+ * needed.
+ */
+const MAX_SUBTREE_NODES = 40;
+
+/** Page-region tags that are layout structure, not reusable components. */
+const REGION_TAGS = new Set(['section', 'header', 'footer', 'nav', 'main', 'aside']);
+
+/** True when a layer is a top-level page region we should never componentize. */
+function isPageRegion(layer: Layer): boolean {
+  const tag = layer.settings?.tag ?? layer.name;
+  return REGION_TAGS.has(tag);
+}
 
 /** A structural signature that ignores ids and content but captures shape. */
 function shapeSignature(layer: Layer): string {
@@ -66,7 +94,9 @@ export async function componentizeLayers(layers: Layer[], mat: ImportMaterialize
 async function groupSiblings(siblings: Layer[], mat: ImportMaterializer): Promise<Layer[]> {
   const groups = new Map<string, Layer[]>();
   for (const layer of siblings) {
-    if (countNodes(layer) < MIN_SUBTREE_NODES) continue;
+    const size = countNodes(layer);
+    if (size < MIN_SUBTREE_NODES || size > MAX_SUBTREE_NODES) continue;
+    if (isPageRegion(layer)) continue;
     if (subtreeHasCollection(layer)) continue;
     const sig = shapeSignature(layer);
     const list = groups.get(sig) ?? [];

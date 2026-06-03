@@ -62,12 +62,24 @@ export interface ImportNode {
   tag?: string;
   /** Reusable style references — base class first, combo classes after. */
   styles?: ImportStyleRef[];
-  /** Extra one-off classes not tied to a reusable style. */
+  /** Extra one-off classes not tied to a reusable style (highest priority). */
   classes?: string[];
+  /**
+   * Lowest-priority layout defaults (e.g. a Webflow widget's built-in framework
+   * CSS that isn't in the clipboard). These are applied *under* the element's
+   * own styles, so they only fill gaps the user's classes don't already set.
+   */
+  frameworkClasses?: string[];
   /** Plain text (newlines denote hard breaks) for text / heading / link nodes. */
   text?: string;
   image?: ImportImage;
   link?: ImportLink;
+  /**
+   * Marks a link that the source treats as a button (e.g. Webflow's
+   * `data.button`). Converted to a Ycode `button` layer so it shrink-wraps and
+   * picks up button defaults instead of rendering as a stretched div-link.
+   */
+  button?: boolean;
   /** Inline SVG markup for icon nodes. */
   svg?: string;
   /** Friendly name from the source — used when naming recovered components. */

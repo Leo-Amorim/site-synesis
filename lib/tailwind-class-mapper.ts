@@ -1227,11 +1227,13 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     cls.startsWith('bg-[') && extractArbitraryValue(cls)?.includes('gradient(')
   );
 
-  // If we have all the gradient text indicators, extract the gradient and store as text color
+  // If we have all the gradient text indicators, extract the gradient and store as text color.
+  // Arbitrary Tailwind values encode spaces as underscores (e.g. "#605dba_20%"), so restore
+  // them — an un-decoded gradient is invalid CSS and the text-transparent fill renders blank.
   if (hasBgClipText && hasTextTransparent && gradientBgClass) {
     const gradientValue = extractArbitraryValue(gradientBgClass);
     if (gradientValue) {
-      design.typography!.color = gradientValue;
+      design.typography!.color = gradientValue.replace(/_/g, ' ');
     }
   }
 

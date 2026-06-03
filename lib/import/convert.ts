@@ -9,8 +9,46 @@
 import type { Layer, LinkSettings } from '@/types';
 import { generateId } from '@/lib/utils';
 import { buildDesign } from '@/lib/import/design';
+import { getAffectedProperties, removeConflictingClasses } from '@/lib/tailwind-class-mapper';
 import type { ImportMaterializer } from '@/lib/import/materializer';
-import type { ImportNode } from '@/lib/import/types';
+import type { ImportNode, ImportStyleRef } from '@/lib/import/types';
+
+/** Breakpoint + state prefix on a Tailwind class (empty for base desktop/neutral). */
+const CLASS_PREFIX_RE = /^((?:max-lg:|max-md:|lg:|md:)?(?:hover:|focus:|active:|disabled:|visited:|current:)?)/;
+
+function classPrefix(cls: string): string {
+  return cls.match(CLASS_PREFIX_RE)?.[1] ?? '';
+}
+
+/**
+ * Collapse an ordered class stack (base first, combos/overrides last) into a
+ * conflict-free list where later classes win per property — scoped to the same
+ * breakpoint/state group.
+ *
+ * Webflow resolves a base class + combo classes by source order (the combo
+ * wins). But stacking two utilities for the same property (e.g. base
+ * `bg-[#f3f4f6]` and combo `bg-[#19292a]`) doesn't cascade by attribute order
+ * in the compiled stylesheet, so the wrong one can win. We therefore drop the
+ * earlier conflicting class, keeping the later one. Reuses Ycode's own
+ * property-aware conflict detection, which (unlike tailwind-merge) correctly
+ * separates background-color vs background-image, font-size vs text-color, etc.
+ */
+function mergeClassStack(orderedClasses: string[]): string[] {
+  const merged: string[] = [];
+  for (const cls of orderedClasses) {
+    const props = getAffectedProperties(cls);
+    if (props.length > 0) {
+      const prefix = classPrefix(cls);
+      for (let i = merged.length - 1; i >= 0; i -= 1) {
+        if (classPrefix(merged[i]) !== prefix) continue;
+        const conflicts = props.some((prop) => removeConflictingClasses([merged[i]], prop).length === 0);
+        if (conflicts) merged.splice(i, 1);
+      }
+    }
+    if (!merged.includes(cls)) merged.push(cls);
+  }
+  return merged;
+}
 
 /** Semantic tags that should be preserved via `settings.tag` on a div layer. */
 const SEMANTIC_TAGS = new Set([
@@ -72,20 +110,45 @@ export class ImportConverter {
     }
   }
 
-  /** Resolve a node's reusable styles + extra classes into a styled layer base. */
+  /**
+   * Resolve a node's reusable styles + extra classes into a styled layer base.
+   *
+   * Webflow stacks multiple reusable classes on one element (base + combos), but
+   * Ycode allows a single `styleId` per layer. So we collapse the whole class
+   * stack into one reusable `LayerStyle`, deduped by the ordered stack identity.
+   * Identical stacks across elements share the same style (real reuse), and no
+   * `styleOverrides` are written unless a genuine one-off class is present —
+   * which keeps layers from being flagged "Customized".
+   */
   private async resolveStyling(node: ImportNode): Promise<ResolvedStyling> {
     const refs = node.styles ?? [];
     const extra = node.classes ?? [];
+    // Widget layout defaults sit *under* the element's own styles, so they merge
+    // in first and lose any per-property conflict to the user's classes.
+    const framework = node.frameworkClasses ?? [];
 
-    const base = refs.find((r) => !r.combo) ?? refs[0];
-    const combos = base ? refs.filter((r) => r !== base) : refs;
+    if (refs.length > 0) {
+      // Base class first, then combos, preserving order so combo/later classes
+      // win (matches Webflow precedence and Tailwind's last-wins resolution).
+      const base = refs.find((r) => !r.combo) ?? refs[0];
+      const combos = refs.filter((r) => r !== base);
+      const ordered = [base, ...combos];
 
-    if (base) {
-      const style = await this.mat.getOrCreateStyle(base);
+      const stackRef: ImportStyleRef = {
+        // Fold framework defaults into the key so two nodes that share user
+        // classes but differ in widget layout don't collapse to one style.
+        key: [...(framework.length ? [`fw:${framework.join('+')}`] : []), ...ordered.map((r) => r.key)].join('|'),
+        name: ordered.map((r) => r.name).join(' · '),
+        // Framework first (lowest priority), then base + combos so later
+        // declarations win per property.
+        classes: mergeClassStack([...framework, ...ordered.flatMap((r) => r.classes)]),
+      };
+
+      const style = await this.mat.getOrCreateStyle(stackRef);
       if (style) {
-        const overrideClasses = [...combos.flatMap((c) => c.classes), ...extra];
-        if (overrideClasses.length > 0) {
-          const full = `${style.classes} ${overrideClasses.join(' ')}`.trim();
+        if (extra.length > 0) {
+          // One-off classes override the shared style, so they merge in last.
+          const full = mergeClassStack([...style.classes.split(/\s+/).filter(Boolean), ...extra]).join(' ');
           const design = buildDesign(full);
           return {
             classes: full,
@@ -98,8 +161,9 @@ export class ImportConverter {
       }
     }
 
-    // No reusable style (none present, or creation failed): inline everything.
-    const all = [...refs.flatMap((r) => r.classes), ...extra].join(' ').trim();
+    // No reusable style (none present, or creation failed): inline everything,
+    // framework defaults first so the user's classes still win conflicts.
+    const all = mergeClassStack([...framework, ...refs.flatMap((r) => r.classes), ...extra]).join(' ').trim();
     return { classes: all, design: buildDesign(all) };
   }
 
@@ -113,7 +177,9 @@ export class ImportConverter {
   private async convertBox(node: ImportNode, isLink: boolean): Promise<Layer> {
     const styling = await this.resolveStyling(node);
     const tag = node.tag?.toLowerCase();
-    const name = tag === 'section' ? 'section' : tag === 'form' ? 'form' : 'div';
+    const name = node.button
+      ? 'button'
+      : tag === 'section' ? 'section' : tag === 'form' ? 'form' : 'div';
 
     const layer: Layer = { id: generateId('lyr'), name, classes: '' };
     this.applyStyling(layer, styling);
@@ -157,6 +223,7 @@ export class ImportConverter {
       variables: { text: makeRichTextVariable(node.text ?? '') },
     };
     this.applyStyling(layer, styling);
+    if (node.displayName) layer.customName = node.displayName;
 
     if (isHeading && node.tag && /^h[1-6]$/.test(node.tag)) {
       layer.settings = { ...layer.settings, tag: node.tag };
@@ -190,6 +257,7 @@ export class ImportConverter {
       },
     };
     this.applyStyling(layer, styling);
+    if (node.displayName) layer.customName = node.displayName;
 
     if (img.width || img.height) {
       layer.attributes = {
@@ -212,6 +280,7 @@ export class ImportConverter {
       variables: { icon: { src: { type: 'static_text', data: { content: node.svg } } } },
     };
     this.applyStyling(layer, styling);
+    if (node.displayName) layer.customName = node.displayName;
     return layer;
   }
 
@@ -225,6 +294,7 @@ export class ImportConverter {
       variables: { collection: { id: '' } },
     };
     this.applyStyling(layer, styling);
+    if (node.displayName) layer.customName = node.displayName;
 
     const template = node.children ? await this.convertNodes(node.children) : [];
     layer.children = template.length > 0
