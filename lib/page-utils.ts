@@ -9,6 +9,38 @@ import { getTiptapTextContent } from '@/lib/text-format-utils';
 import { buildPasswordFormSubtree } from '@/lib/password-form-template';
 
 /**
+ * Build a revision key from a page's effective password protection (its own
+ * settings plus any ancestor folder settings). Used by the builder to reload
+ * the preview iframe when password settings change but the URL stays the same.
+ */
+export function buildPreviewAuthRevision(
+  page: Page | null | undefined,
+  folders: PageFolder[],
+): string {
+  if (!page) return '';
+
+  const parts: string[] = [
+    page.updated_at,
+    String(page.settings?.auth?.enabled ?? false),
+    page.settings?.auth?.password ?? '',
+  ];
+
+  let folderId = page.page_folder_id;
+  while (folderId) {
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder) break;
+    parts.push(
+      folder.updated_at,
+      String(folder.settings?.auth?.enabled ?? false),
+      folder.settings?.auth?.password ?? '',
+    );
+    folderId = folder.page_folder_id;
+  }
+
+  return parts.join('|');
+}
+
+/**
  * Reserved slugs that cannot be used at the root level (null parent folder)
  * These conflict with the app's routing structure
  */

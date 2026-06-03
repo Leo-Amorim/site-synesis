@@ -413,6 +413,32 @@ export interface SelectiveInvalidationResult {
 }
 
 /**
+ * Returns true if any of the given page IDs is a published error page
+ * (404/401, etc.). Error pages carry an `error_page` code instead of a slug.
+ */
+async function hasErrorPage(pageIds: string[]): Promise<boolean> {
+  if (pageIds.length === 0) return false;
+
+  const client = await getSupabaseAdmin();
+  if (!client) return false;
+
+  for (const ids of chunk(pageIds, SUPABASE_IN_LIMIT)) {
+    const { data } = await client
+      .from('pages')
+      .select('id')
+      .in('id', ids)
+      .eq('is_published', true)
+      .not('error_page', 'is', null)
+      .is('deleted_at', null)
+      .limit(1);
+
+    if (data && data.length > 0) return true;
+  }
+
+  return false;
+}
+
+/**
  * Perform selective cache invalidation based on what actually changed.
  *
  * Receives the exact page IDs that were modified during publish (content_hash
@@ -437,6 +463,17 @@ export async function selectiveInvalidation(
 
   if (allAffectedIds.length === 0) {
     return { strategy: 'selective', invalidatedRoutes: [], reason: 'no pages changed' };
+  }
+
+  // Error pages (401/404) have empty slugs, so they resolve to no route and
+  // can't be selectively invalidated. They're also embedded into other routes
+  // (the 401 page renders inside every password-protected page; the 404 page
+  // renders on unmatched URLs) and served via the `all-pages`-tagged
+  // `error-<code>` data cache. A selective route purge would never refresh
+  // them, so escalate to a full invalidation when an error page changed.
+  if (await hasErrorPage(allAffectedIds)) {
+    await clearAllCache();
+    return { strategy: 'full', invalidatedRoutes: [], reason: 'error page changed' };
   }
 
   const routePaths = await getRoutePathsForPages(allAffectedIds);

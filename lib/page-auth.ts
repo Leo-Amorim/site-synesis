@@ -13,24 +13,47 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 /** Cookie name for page authentication - exported for use in API routes */
 export const PAGE_AUTH_COOKIE_NAME = 'ycode_page_auth';
 
+// Last-resort per-process secret. Resets on every process/deploy and differs
+// between serverless instances, so cookies signed with it won't verify across
+// requests. Only used when no stable secret is available.
 const fallbackSecret = randomUUID();
 let hasWarnedMissingSecret = false;
 
 /**
- * Get the signing secret from environment.
- * Falls back to a per-process random value if PAGE_AUTH_SECRET is not set,
- * which means auth cookies won't persist across server restarts.
+ * Get the HMAC signing secret for auth cookies.
+ *
+ * Order of preference:
+ *  1. PAGE_AUTH_SECRET — explicit, recommended.
+ *  2. A value derived from an always-present Supabase secret. This keeps the
+ *     signature stable across serverless instances and deploys WITHOUT extra
+ *     configuration. It's run through HMAC (never used raw) so the cookie
+ *     signature can't leak the underlying key.
+ *  3. A per-process random secret — last resort. Cookies won't verify across
+ *     serverless instances or restarts, so password unlock appears to fail.
+ *
+ * Before (2) existed, an unset PAGE_AUTH_SECRET meant the /verify endpoint and
+ * the redirected page render could run on different instances with different
+ * random secrets — the correct password was accepted but the session cookie
+ * was rejected, leaving the visitor stuck on the 401 page.
  */
 function getSigningSecret(): string {
-  const secret = process.env.PAGE_AUTH_SECRET;
-  if (!secret) {
-    if (!hasWarnedMissingSecret && process.env.NODE_ENV === 'production') {
-      console.warn('[page-auth] PAGE_AUTH_SECRET is not set. Page password protection is using a temporary secret that resets on each deploy. Set PAGE_AUTH_SECRET in your environment variables (generate with: openssl rand -hex 32).');
-      hasWarnedMissingSecret = true;
-    }
-    return fallbackSecret;
+  const explicit = process.env.PAGE_AUTH_SECRET;
+  if (explicit) return explicit;
+
+  const supabaseSecret =
+    process.env.SUPABASE_SECRET_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || process.env.SUPABASE_DB_PASSWORD;
+
+  if (supabaseSecret) {
+    return createHmac('sha256', supabaseSecret).update('ycode-page-auth-v1').digest('hex');
   }
-  return secret;
+
+  if (!hasWarnedMissingSecret && process.env.NODE_ENV === 'production') {
+    console.warn('[page-auth] PAGE_AUTH_SECRET is not set and no Supabase secret is available. Page password protection is using a temporary secret that resets on each deploy and will not verify across serverless instances. Set PAGE_AUTH_SECRET (generate with: openssl rand -hex 32).');
+    hasWarnedMissingSecret = true;
+  }
+  return fallbackSecret;
 }
 
 /**
@@ -181,24 +204,20 @@ export function getPasswordProtection(
 }
 
 /**
- * Fetch folders for password protection checks
- * 
- * @param isPublished - If true, fetch only published folders. If false, fetch all (for preview).
+ * Fetch folders for password protection checks.
+ *
+ * @param isPublished - If true, fetch published folders; if false, fetch draft folders (preview).
  * @returns Array of page folders
  */
 export async function fetchFoldersForAuth(isPublished: boolean): Promise<PageFolder[]> {
   const supabase = await getSupabaseAdmin();
   if (!supabase) return [];
 
-  let query = supabase
+  const { data } = await supabase
     .from('page_folders')
     .select('*')
+    .eq('is_published', isPublished)
     .is('deleted_at', null);
 
-  if (isPublished) {
-    query = query.eq('is_published', true);
-  }
-
-  const { data } = await query;
   return (data as PageFolder[]) || [];
 }
