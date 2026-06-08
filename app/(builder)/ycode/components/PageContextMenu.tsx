@@ -41,7 +41,6 @@ function PageContextMenuInner({
   statusAvailability,
 }: Omit<PageContextMenuProps, 'children'>) {
   const isItemHomepage = nodeType === 'page' && isHomepage(item as Page);
-  const isItemDynamic = nodeType === 'page' && (item as Page).is_dynamic;
   const isTempItem = item.id.startsWith('temp-page-') || item.id.startsWith('temp-folder-');
 
   return (
@@ -105,7 +104,7 @@ function PageContextMenuInner({
       {(onDuplicate || onDelete) && <ContextMenuSeparator />}
 
       {onDuplicate && (
-        <ContextMenuItem onClick={onDuplicate} disabled={isItemDynamic}>
+        <ContextMenuItem onClick={onDuplicate}>
           <span>Duplicate</span>
         </ContextMenuItem>
       )}

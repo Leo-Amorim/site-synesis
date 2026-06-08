@@ -1942,21 +1942,22 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
       return { success: false, error: 'Page not found' };
     }
 
-    // Dynamic pages cannot be duplicated
-    if (originalPage.is_dynamic) {
-      return { success: false, error: 'Dynamic pages cannot be duplicated' };
-    }
-
     // Generate temporary ID for optimistic update
     const tempId = `temp-page-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const tempPublishKey = `temp-${Date.now()}`;
     const newOrder = originalPage.order + 1;
 
+    // Dynamic pages keep their original slug pattern; other pages get a temporary
+    // unique slug until the server returns the real duplicated page.
+    const tempSlug = originalPage.is_dynamic
+      ? originalPage.slug
+      : `${originalPage.slug}-copy-${Date.now()}`;
+
     // Create temporary duplicated page
     const tempPage: Page = {
       id: tempId,
       name: `${originalPage.name} (Copy)`,
-      slug: `${originalPage.slug}-copy-${Date.now()}`,
+      slug: tempSlug,
       is_published: false,
       is_publishable: originalPage.is_publishable ?? true,
       page_folder_id: originalPage.page_folder_id,

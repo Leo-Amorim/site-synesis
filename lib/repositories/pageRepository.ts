@@ -801,46 +801,47 @@ export async function duplicatePage(pageId: string): Promise<Page> {
     throw new Error('Page not found');
   }
 
-  // Dynamic pages cannot be duplicated
-  if (originalPage.is_dynamic) {
-    throw new Error('Dynamic pages cannot be duplicated');
-  }
-
   const newName = `${originalPage.name} (Copy)`;
 
-  // Generate base slug from the new name
-  const baseSlug = newName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
+  // Dynamic pages keep their original slug pattern (e.g. '*'); the conflicting
+  // slug warning between dynamic pages in the same folder is handled in the UI.
+  let newSlug = originalPage.slug;
 
-  // Get all existing slugs in the same folder to find a unique one
-  let query = client
-    .from('pages')
-    .select('slug')
-    .eq('is_published', false)
-    .is('error_page', null)
-    .is('deleted_at', null);
+  if (!originalPage.is_dynamic) {
+    // Generate base slug from the new name
+    const baseSlug = newName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
 
-  // Handle null parent folder properly
-  if (originalPage.page_folder_id === null) {
-    query = query.is('page_folder_id', null);
-  } else {
-    query = query.eq('page_folder_id', originalPage.page_folder_id);
-  }
+    // Get all existing slugs in the same folder to find a unique one
+    let query = client
+      .from('pages')
+      .select('slug')
+      .eq('is_published', false)
+      .is('error_page', null)
+      .is('deleted_at', null);
 
-  const { data: existingPages } = await query;
+    // Handle null parent folder properly
+    if (originalPage.page_folder_id === null) {
+      query = query.is('page_folder_id', null);
+    } else {
+      query = query.eq('page_folder_id', originalPage.page_folder_id);
+    }
 
-  const existingSlugs = (existingPages || []).map(p => p.slug.toLowerCase());
+    const { data: existingPages } = await query;
 
-  // Find unique slug
-  let newSlug = baseSlug;
-  if (existingSlugs.includes(baseSlug)) {
-    let counter = 2;
-    newSlug = `${baseSlug}-${counter}`;
-    while (existingSlugs.includes(newSlug)) {
-      counter++;
+    const existingSlugs = (existingPages || []).map(p => p.slug.toLowerCase());
+
+    // Find unique slug
+    newSlug = baseSlug;
+    if (existingSlugs.includes(baseSlug)) {
+      let counter = 2;
       newSlug = `${baseSlug}-${counter}`;
+      while (existingSlugs.includes(newSlug)) {
+        counter++;
+        newSlug = `${baseSlug}-${counter}`;
+      }
     }
   }
 

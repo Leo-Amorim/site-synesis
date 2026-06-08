@@ -298,7 +298,6 @@ const PageRow = React.memo(function PageRow({
                 }}
                 disabled={
                   !onDuplicate ||
-                  (node.type === 'page' && (node.data as Page).is_dynamic) ||
                   (node.type === 'page' && (node.data as Page).error_page !== null)
                 }
               >
